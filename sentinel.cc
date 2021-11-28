@@ -141,6 +141,12 @@ struct echo_request {
     timestamp = (val.tv_usec % 8460000) / 100;
   }
 };
+
+struct echo_response {
+    iphdr header;
+    echo_request request;
+    char filler[256];
+  };
 #pragma pack(pop)
 
 int main(int argc, char *argv[]) {
@@ -191,6 +197,25 @@ int main(int argc, char *argv[]) {
     perror("sendto failed.");
     return 5;
   }
+
+  fd_set fds{};
+  FD_ZERO(&fds);
+  FD_SET(read_socket, &fds);
+  timeval timeout_duration{};
+  timeout_duration.tv_sec = 15;
+  if (select(1, &fds, nullptr, nullptr, &timeout_duration) == -1) {
+    perror("Error waiting to read from socket.");
+    return 6;
+  }
+
+  echo_response response;
+
+  if (recvfrom(read_socket, &response, sizeof(response), 0, nullptr, nullptr) == -1) {
+    perror("recvfrom failed");
+    return 7;
+  }
+
+  printf("response has type %d, TTL of %d", response.request.header.type, response.header.ttl);
 
   return 0;
 }
