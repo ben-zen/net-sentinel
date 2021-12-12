@@ -128,11 +128,11 @@ uint16_t compute_checksum(uint8_t *data, size_t len) {
 }
 
 #pragma pack(push,1)
-struct echo_request {
+struct icmp_echo {
   icmphdr header {};
   uint32_t timestamp;
   char buffer[64] = {};
-  echo_request() {
+  icmp_echo() {
     header.type = ICMP_ECHO;
     header.un.echo.id = getpid();
     header.un.echo.sequence = 1;
@@ -142,12 +142,31 @@ struct echo_request {
   }
 };
 
-struct echo_response {
+struct echo_packet {
     iphdr header;
-    echo_request request;
+    icmp_echo request;
     char filler[256];
   };
 #pragma pack(pop)
+
+void trace_route(const socket_t &sock, struct sockaddr_in &saddr, struct sockaddr_in &daddr) {
+  // Set the TTL on packets until the destination is reached or the limit is hit
+  int ttl = 1;
+  while (ttl < 32) {
+    echo_packet request;
+    request.header.ttl = ttl;
+    request.header.daddr = daddr.sin_addr.s_addr;
+    request.header.saddr = saddr.sin_addr.s_addr;
+    request.header.protocol = IPPROTO_ICMP;
+    request.header.version = 4;
+
+    char text[] = "icmp traceroute test";
+    memcpy(request.request.buffer, text, sizeof(text));
+    request.request.header.checksum = compute_checksum((uint8_t *)&request.header, sizeof(request.header));
+    printf("Sending request with ttl %d", ttl);
+    ttl++;
+  }
+}
 
 int main(int argc, char *argv[]) {
 
@@ -183,7 +202,7 @@ int main(int argc, char *argv[]) {
 
   puts("Bound to socket! Ready to listen?");
 
-  echo_request request{};
+  icmp_echo request{};
   char example[] = "test icmp echo impl";
   memcpy(request.buffer, example, sizeof(example));
   request.header.checksum = compute_checksum((uint8_t *) &request, sizeof(request));
@@ -208,12 +227,13 @@ int main(int argc, char *argv[]) {
     return 6;
   }
 
-  echo_response response;
-
+  echo_packet response;
   if (recvfrom(read_socket, &response, sizeof(response), 0, nullptr, nullptr) == -1) {
     perror("recvfrom failed");
     return 7;
   }
+
+  trace_route(read_socket, *addr_v4, destination);
 
   printf("response has type %d, TTL of %d", response.request.header.type, response.header.ttl);
 
