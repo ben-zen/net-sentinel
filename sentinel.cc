@@ -149,19 +149,20 @@ struct echo_packet {
   };
 #pragma pack(pop)
 
-void trace_route(const socket_t &sock, in_addr_t &saddr, in_addr_t &daddr) {
+void trace_route(const socket_t &sock, const sockaddr_in &saddr, const sockaddr_in &daddr) {
   int set_header_value = 1;
   if (setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &set_header_value, sizeof(set_header_value)) == -1) {
     perror("Error setting the socket to allow custom header definitions");
     return;
   }
+  printf("Beginning traceroute\n");
   // Set the TTL on packets until the destination is reached or the limit is hit
   int ttl = 1;
   while (ttl < 32) {
     echo_packet request;
     request.header.ttl = ttl;
-    request.header.daddr = daddr;
-    request.header.saddr = saddr;
+    request.header.daddr = daddr.sin_addr.s_addr;
+    request.header.saddr = saddr.sin_addr.s_addr;
     request.header.protocol = IPPROTO_ICMP;
     request.header.version = 4;
     request.header.ihl = 5;
@@ -171,11 +172,22 @@ void trace_route(const socket_t &sock, in_addr_t &saddr, in_addr_t &daddr) {
     char text[] = "icmp traceroute test";
     memcpy(request.request.buffer, text, sizeof(text));
     request.request.header.checksum = compute_checksum((uint8_t *)&request.header, sizeof(request.header));
-    printf("Sending request with ttl %d", ttl);
+    request.header.check = compute_checksum((uint8_t *)&request, sizeof(request));
+    printf("Sending request with ttl %d\n", ttl);
 
-    if (send(sock, &request, sizeof(request), 0) == -1) {
+    if (sendto(sock, &request, sizeof(request), 0, (const sockaddr *) &daddr, sizeof(daddr)) == -1) {
       perror("Failed to send traceroute packet");
       break;
+    }
+
+    fd_set fds{};
+    FD_ZERO(&fds);
+    FD_SET(sock, &fds);
+    timeval timeout_duration{};
+    timeout_duration.tv_sec = 5;
+    if (select(1, &fds, nullptr, nullptr, &timeout_duration) == -1) {
+      perror("Error waiting to read from socket; no echo reply");
+      continue;
     }
 
     echo_packet response;
@@ -184,13 +196,16 @@ void trace_route(const socket_t &sock, in_addr_t &saddr, in_addr_t &daddr) {
       break;
     }
 
-    printf("response has type %d, TTL of %d", response.request.header.type, response.header.ttl);
+    printf("response has type %d, TTL of %d\n", response.request.header.type, response.header.ttl);
 
     if (response.request.header.type == ICMP_ECHOREPLY) {
       printf("Reached destination at TTL %d\n", response.header.ttl);
+      break;
     }
     ttl++;
   }
+
+  printf("Ended traceroute\n");
 
   if (setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &set_header_value, sizeof(set_header_value)) == -1) {
     perror("Error resetting the socket to prior state custom header definitions");
@@ -266,8 +281,7 @@ int main(int argc, char *argv[]) {
   
   printf("response has type %d, TTL of %d\n", response.request.header.type, response.header.ttl);
 
-  in_addr_t trace_route_destination = 0x08080808U;
-  trace_route(read_socket, addr_v4->sin_addr.s_addr, trace_route_destination);
+  trace_route(read_socket, *addr_v4, destination);
 
 
   return 0;
